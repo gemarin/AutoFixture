@@ -18,6 +18,8 @@ let nuGetPackages = !! (nuGetOutputFolder @@ "*.nupkg" )
 let signKeyPath = FullName "Src/AutoFixture.snk"
 let solutionsToBuild = !! "Src/All.sln"
 // === vNext config ===
+// To disable vNext branch set all the variables below to None
+let vNextBranchName = Some "v4"
 // Specify sha1 of the master branch commit the vNext branch was forked from
 let vNextForkedCommitSha = Some "a177824f05e911c70aac1a459b8da5bd206cf410"
 
@@ -310,16 +312,19 @@ Target "PublishNuGetAll" DoNothing
 type AppVeyorEnvironment with
     static member IsPullRequest = isNotNullOrEmpty AppVeyorEnvironment.PullRequestNumber
 
-type AppVeyorTrigger = SemVerTag | CustomTag | PR | Unknown
+type AppVeyorTrigger = SemVerTag | CustomTag | PR | VNextBranch | Unknown
 let anAppVeyorTrigger =
     let tag = if AppVeyorEnvironment.RepoTag then Some AppVeyorEnvironment.RepoTagName else None
     let isPR = AppVeyorEnvironment.IsPullRequest
+    let branch = AppVeyorEnvironment.RepoBranch
 
-    match tag, isPR with
-    | Some t, _ when "v\d+.*" >** t -> SemVerTag
-    | Some _, _                     -> CustomTag
-    | _, true                       -> PR
-    | _                             -> Unknown
+    match tag, isPR, branch with
+    | Some t, _, _ when "v\d+.*" >** t        -> SemVerTag
+    | Some _, _, _                            -> CustomTag
+    | _, true, _                              -> PR
+    // Branch name should be checked after the PR flag, becuase for PR it's set to the upstream branch name.
+    | _, _, br when Some br = vNextBranchName -> VNextBranch
+    | _                                       -> Unknown
 
 // Print state info at the very beginning
 if buildServer = BuildServer.AppVeyor 
@@ -330,14 +335,24 @@ if buildServer = BuildServer.AppVeyor
               AppVeyorEnvironment.RepoBranch
               anAppVeyorTrigger
 
+Target "AppVeyor_SetVNextVersion" (fun _ ->
+    // vNext branch has the following name: "vX", where X is the next version
+    AppVeyorEnvironment.RepoBranch.Substring(1) 
+    |> int
+    |> setVNextBranchVersion
+)
+
 Target "AppVeyor" (fun _ ->
     //Artifacts might be deployable, so we update build version to find them later by file version
     if not AppVeyorEnvironment.IsPullRequest then UpdateBuildVersion buildVersion.fileVersion
 )
 
+"AppVeyor_SetVNextVersion" =?> ("PatchAssemblyVersions", anAppVeyorTrigger = VNextBranch)
+
 // Add logic to resolve action based on current trigger info
 dependency "AppVeyor" <| match anAppVeyorTrigger with
                          | SemVerTag                -> "PublishNuGetPublic"
+                         | VNextBranch              -> "PublishNuGetPrivate"
                          | PR | CustomTag | Unknown -> "CompleteBuild"
 
 
