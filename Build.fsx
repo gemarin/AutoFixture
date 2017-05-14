@@ -17,6 +17,9 @@ let nuGetPackages = !! (nuGetOutputFolder @@ "*.nupkg" )
                     -- (nuGetOutputFolder @@ "AutoFixture.AutoFakeItEasy2.*" )
 let signKeyPath = FullName "Src/AutoFixture.snk"
 let solutionsToBuild = !! "Src/All.sln"
+// === vNext config ===
+// Specify sha1 of the master branch commit the vNext branch was forked from
+let vNextForkedCommitSha = Some "a177824f05e911c70aac1a459b8da5bd206cf410"
 
 type BuildVersionCalculationSource = { major: int; minor: int; revision: int; preSuffix: string; 
                                        commitsNum: int; sha: string; buildNumber: int }
@@ -76,6 +79,26 @@ let mutable buildVersion = match getBuildParamOrDefault "BuildVersion" "git" wit
                                               infoVersion = getBuildParamOrDefault "BuildInfoVersion" assemblyVer
                                               nugetVersion = getBuildParamOrDefault "BuildNugetVersion" assemblyVer
                                               source = None }
+
+let setVNextBranchVersion vNextVersion =
+    buildVersion <-
+        match buildVersion.source, vNextForkedCommitSha with
+        // Don't update version if it was explicitly specified or vNext fork commit info is missing
+        | None, _ | _, None                      -> buildVersion
+        // Don't update version if tag with current major version is already present (e.g. rc is released)
+        | Some s, _ when s.major >= vNextVersion -> buildVersion
+        | Some source, Some forkCommitSha        -> 
+            let commitsNum = sprintf "rev-list --count %s..HEAD" forkCommitSha
+                             |> Git.CommandHelper.runSimpleGitCommand ""
+                             |> int
+
+            // Set version to X.0.0-alpha.NUM, where X - major version, NUM - number of commits since fork
+            { source with major = vNextVersion
+                          minor = 0
+                          revision = 0
+                          preSuffix = "-alpha"
+                          commitsNum = commitsNum }
+            |> calculateVersion
 
 Target "PatchAssemblyVersions" (fun _ ->
     printfn 
