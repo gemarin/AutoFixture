@@ -17,11 +17,13 @@ let nuGetPackages = !! (nuGetOutputFolder @@ "*.nupkg" )
                     -- (nuGetOutputFolder @@ "AutoFixture.AutoFakeItEasy2.*" )
 let signKeyPath = FullName "Src/AutoFixture.snk"
 let solutionsToBuild = !! "Src/All.sln"
-// === vNext config ===
-// To disable vNext branch set all the variables below to None
-let vNextBranchName = Some "v4"
+
+type VNextInfo = { name:string; forkedCommitSha:string }
+// To disable vNext branch set the vNextInfo variable to None
 // Specify sha1 of the master branch commit the vNext branch was forked from
-let vNextForkedCommitSha = Some "a177824f05e911c70aac1a459b8da5bd206cf410"
+let vNextBranchInfo:Option<VNextInfo> = Some { name="v4"; forkedCommitSha = "a177824f05e911c70aac1a459b8da5bd206cf410" }
+
+
 
 type BuildVersionCalculationSource = { major: int; minor: int; revision: int; preSuffix: string; 
                                        commitsNum: int; sha: string; buildNumber: int }
@@ -84,13 +86,13 @@ let mutable buildVersion = match getBuildParamOrDefault "BuildVersion" "git" wit
 
 let setVNextBranchVersion vNextVersion =
     buildVersion <-
-        match buildVersion.source, vNextForkedCommitSha with
+        match buildVersion.source, vNextBranchInfo with
         // Don't update version if it was explicitly specified or vNext fork commit info is missing
         | None, _ | _, None                      -> buildVersion
         // Don't update version if tag with current major version is already present (e.g. rc is released)
         | Some s, _ when s.major >= vNextVersion -> buildVersion
-        | Some source, Some forkCommitSha        -> 
-            let commitsNum = sprintf "rev-list --count %s..HEAD" forkCommitSha
+        | Some source, Some vNextInfo        -> 
+            let commitsNum = sprintf "rev-list --count %s..HEAD" vNextInfo.forkedCommitSha
                              |> Git.CommandHelper.runSimpleGitCommand ""
                              |> int
 
@@ -318,13 +320,13 @@ let anAppVeyorTrigger =
     let isPR = AppVeyorEnvironment.IsPullRequest
     let branch = AppVeyorEnvironment.RepoBranch
 
-    match tag, isPR, branch with
-    | Some t, _, _ when "v\d+.*" >** t        -> SemVerTag
-    | Some _, _, _                            -> CustomTag
-    | _, true, _                              -> PR
+    match tag, isPR, (branch, vNextBranchInfo) with
+    | Some t, _, _ when "v\d+.*" >** t            -> SemVerTag
+    | Some _, _, _                                -> CustomTag
+    | _, true, _                                  -> PR
     // Branch name should be checked after the PR flag, becuase for PR it's set to the upstream branch name.
-    | _, _, br when Some br = vNextBranchName -> VNextBranch
-    | _                                       -> Unknown
+    | _, _, (br, Some vNext) when br = vNext.name -> VNextBranch
+    | _                                           -> Unknown
 
 // Print state info at the very beginning
 if buildServer = BuildServer.AppVeyor 
